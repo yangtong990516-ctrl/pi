@@ -569,9 +569,15 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 		return;
 	});
 
-	// 1b. 剥离 provider payload 的 reasoning_effort 字段
+	// 1b. 剥离 provider payload 的 reasoning_effort 字段（T7：可控模式）
 	//
-	//     ⚠️ 状态：待定（PENDING REVIEW）—— 这是一项有副作用、尚未定论的临时措施。
+	//     【T7 改造：从「无条件剥离」改为「可控模式」】
+	//     PI_ARMOR_REASONING_STRIP 取值：
+	//       "on"（默认） —— 无条件剥离（历史行为，破甲率优先）
+	//       "off"        —— 剥离完全关闭（保留用户的 --thinking，日常编程优先）
+	//       "safe"       —— 仅对破甲目标模型剥离（模型 id 含 flash/pro 时）
+	//
+	//     ⚠️ 历史上的待定状态（A/B/C 对照由 T7 定论）：
 	//
 	//     支持剥离的实测（deepseek-v4.1-flash，同一道 crack 题 ×5，官方 40 题）：
 	//       不发送该字段 → 5/5；medium → 4/5；none → 3/5；minimal → 3/5；
@@ -593,7 +599,15 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 	//       C. 采用 dsh-purge 人格帧 + HIGH 推理，彻底放弃剥离
 	//
 	//     在 A/B/C 对照实验出结论前，保留当前无条件剥离（以破甲率为优先）。
-	pi.on("before_provider_request", (event) => {
+	const stripMode = process.env.PI_ARMOR_REASONING_STRIP ?? "on";
+
+	pi.on("before_provider_request", (event, ctx) => {
+		if (stripMode === "off") return;
+		if (stripMode === "safe") {
+			// 仅当目标模型是破甲目标（flash/pro 系列）时才剥离
+			const modelId = String((ctx as { model?: { id?: string } })?.model?.id ?? "").toLowerCase();
+			if (!modelId.includes("flash") && !modelId.includes("pro")) return;
+		}
 		const payload = event.payload as Record<string, unknown>;
 		if ("reasoning_effort" in payload) {
 			delete payload.reasoning_effort;
