@@ -397,17 +397,12 @@ function armorScore(text: string): { verdict: string; words: string[] } {
 // extension 入口
 // ---------------------------------------------------------------------------
 export default function infiniteGen4(pi: ExtensionAPI) {
-	// 1. 注入破甲帧 system prompt（before_agent_start，forceSystemPrompt 完全替换）
-	pi.on("before_agent_start", (event) => {
-		const opts = event.systemPromptOptions;
-		// forceSystemPrompt：完全替换 system prompt（等效 DSH 的 order-100 preamble 抢占）
-		if (PROMPT_TEXT) {
-			opts.forceSystemPrompt = PROMPT_TEXT;
-		}
-		// 附加 4.1-flash 实测层 section（作为独立标签段注入）
-		if (PROMPT41_TEXT) {
-			opts.sections = opts.sections || {};
-			opts.sections.infinite_gen41 = PROMPT41_TEXT;
+	// 1. 注入破甲帧 system prompt（before_agent_start，返回 systemPrompt 完全替换）
+	//    正确 API：handler 返回 { systemPrompt }，runner 会赋给 forceSystemPrompt
+	pi.on("before_agent_start", () => {
+		const full = [PROMPT_TEXT, PROMPT41_TEXT].filter(Boolean).join("\n\n");
+		if (full) {
+			return { systemPrompt: full };
 		}
 	});
 
