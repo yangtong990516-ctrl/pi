@@ -589,6 +589,32 @@ node dist/cli.js \
 > 即 `--thinking medium` 本身就**不发送**该字段。因此 `off` 组测的是「Pi 默认行为」。
 > 若要测「强制 HIGH」，需 `--thinking high`（映射为 `high`）。
 
+### 6.11 T8：移植无状态工具 ✅ 实测
+
+**移植清单**（依据第 5 章选型）：
+
+| 工具 | 来源 | 移植内容 | 实测 |
+|---|---|---|---|
+| `infinite_gen4_roles` | `redteam_roles` | 6 个角色 + 执行顺序 | ✅ 正常返回 |
+| `infinite_gen4_role_prompt` | `redteam_role_prompt` | 每个角色的职责约束 | ✅（共用角色表）|
+| `infinite_gen4_preflight` | `redteam_preflight` | 环境变量 + 二进制 + 基础设施自检 | ✅ 正常返回 |
+
+**`preflight` 实测输出**（本机）：
+```
+可用 1 / 缺失 13
+环境变量缺：FOFA_KEY、FOFA_EMAIL、VPS_HOST
+二进制缺：nmap、nuclei、fscan、gogo、frp、chisel、suo5、sqlmap、ffuf、hydra
+可用：rg (/opt/homebrew/bin/rg)
+```
+→ 该工具**成功阻止了模型编造「缺 key 也能跑」**，是本轮最有价值的移植之一。
+
+**未移植（含原因）**：
+
+| 工具 | 原因 |
+|---|---|
+| `poc_search` | 依赖 `store.searchPocs` + nuclei 模板库扫描（4644 行 store-core），且现有 `infinite_gen4_knowledge` 已覆盖 |
+| `report` | DSH 自己在描述里已标记「【已弃用，改用 redteam_score_report】」|
+
 ### 6.5 ⚠️ 数据冲突登记
 
 | 项 | 冲突内容 | 处理 |
@@ -688,7 +714,7 @@ node -e 'import("./lib/table-read.js").then(m=>{const t=m.openSlot();require("fs
 | **T5** | 融合「术语工程语义映射」进破甲帧 | 无 | 🟡 P1 | ✅ **已完成**（随 T4）|
 | **T6** | 实现「档位自适应」（按模型选帧长）| T4 | 🟡 P1 | ✅ **已完成** |
 | **T7** | A/B/C 实验：`reasoning_effort` 剥离定论（D2-R）| 无 | 🟢 P2 | ✅ **已完成**（HIGH ≈ 剥离）|
-| **T8** | 移植 `roles` + `preflight` 工具 | 无 | 🟢 P2 | ⬜ 未开始 |
+| **T8** | 移植 `roles` + `preflight` 工具 | 无 | 🟢 P2 | ✅ **已完成** |
 
 ### 8.2 已完成
 
@@ -835,7 +861,7 @@ npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs
 
 **当前生效组合**：`[purge-persona(34330), gen-4(15375)]` = **43517 字节**
 
-## 附录 B：12 个工具清单
+## 附录 B：15 个工具清单
 
 | # | 工具名 | 功能 |
 |---|---|---|
@@ -851,6 +877,9 @@ npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs
 | 10 | `infinite_gen4_vendor` | 厂商路由 |
 | 11 | `infinite_gen4_multiturn` | 多轮旁路 |
 | 12 | `infinite_gen4_evolve` | 演化 |
+| 13 | `infinite_gen4_roles` | 红队角色表（T8 移植自 redteam_roles）|
+| 14 | `infinite_gen4_role_prompt` | 角色提示词（T8 移植自 redteam_role_prompt）|
+| 15 | `infinite_gen4_preflight` | 环境自检（T8 移植自 redteam_preflight）|
 
 ## 附录 C：23 个技能清单
 

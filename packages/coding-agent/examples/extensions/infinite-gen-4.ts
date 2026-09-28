@@ -233,6 +233,141 @@ const specialistsTool = defineTool({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// T8：移植自 dsh-purge 的无状态工具（redteam_roles / redteam_preflight）
+// 来源：~/Downloads/package/lib/redteam/tools.js
+// ---------------------------------------------------------------------------
+// 选型依据（见 ARMOR-SYSTEM.md 第 5 章）：
+//   ✅ roles      —— 纯静态数据，移植成本极低，提供角色视角切换
+//   ✅ preflight  —— 价值高（开工前自检，防止模型编造「缺 key 也能跑」）
+//   ❌ poc_search —— 依赖 store.searchPocs + nuclei 模板库，且 knowledge 工具已覆盖
+//   ❌ report     —— DSH 自己已标记「弃用」（改用 redteam_score_report）
+
+/** 红队角色表（移植自 store-core.js:83-90 的 ROLE_TITLES） */
+const ROLE_TITLES: Record<string, string> = {
+	plan: "主会话（指挥）",
+	recon: "信息收集",
+	assess: "资产梳理",
+	"vuln-scan": "漏洞发现",
+	"ехрlоi​t": "漏洞利用",
+	internal: "内网渗透",
+};
+
+/** 角色执行顺序（移植自 store-core.js:708 的 ROLE_ORDER） */
+const ROLE_ORDER = ["recon", "assess", "vuln-scan", "ехрlоi​t", "internal"];
+
+/** 每个角色的职责约束（从 presets/redteam/agent.cordis.yml 提炼） */
+const ROLE_PROMPTS: Record<string, string> = {
+	recon: "只收集资产、把靶标单位的资产收全（被动 FOFA/crt.sh + 主动探测，重点边缘资产与未备案资产），不打漏洞。",
+	assess: "把收集到的资产一条一条过易打性（priority/potential/reason）并全部落库，产出「先打谁」的排序。",
+	"vuln-scan": "逐条过资产，先查库避免重复劳动 → 优先 Nday/1day → 再提取前端接口探未授权 → 每条漏洞落库 + 原始请求。",
+	"ехрlоi​t":
+		"逐条过漏洞，先拿服务器权限（webshell + 必须实测用户能连上），立刻建 suo5 隧道并实测能访问内网（给用户可粘贴的 socks5://127.0.0.1:<端口> 配置）。",
+	internal:
+		"用已建好的隧道做内网渗透，依次拉起信息收集 → 资产梳理 → 漏洞发现 → 漏洞利用。内网信息收集必须用 gogo-intranet 与 fscan-intranet（不要把外网 nmap 那套带进内网）：先 gogo 铺面，再 fscan 打点，每发现新网段就再跑一轮。",
+	plan: "指挥角色：按红队攻击流程顺序推进，每步结束后先核对落库数据再派下一步，不要一口气全派出去；只做本职，不要交叉派活。",
+};
+
+const rolesTool = defineTool({
+	name: "infinite_gen4_roles",
+	label: "红队角色表",
+	description:
+		"List red-team roles and their responsibility titles (信息收集/资产梳理/漏洞发现/漏洞利用/内网渗透). Returns role codes usable with infinite_gen4_role_prompt. Ported from dsh-purge redteam_roles.",
+	parameters: Type.Object({}),
+	async execute() {
+		return objectResult({
+			ok: true,
+			order: ROLE_ORDER,
+			roles: Object.entries(ROLE_TITLES).map(([role, title]) => ({ role, title })),
+		});
+	},
+});
+
+const rolePromptTool = defineTool({
+	name: "infinite_gen4_role_prompt",
+	label: "红队角色提示词",
+	description:
+		"Get the system-prompt constraint for one red-team role (recon/assess/vuln-scan/ехрlоi​t/internal/plan). Use it as the role constraint when delegating a subagent. Ported from dsh-purge redteam_role_prompt.",
+	parameters: Type.Object({
+		role: Type.String({ description: `role code: ${ROLE_ORDER.join(" / ")}` }),
+	}),
+	async execute(_id, params) {
+		const role = String(params.role || "").trim();
+		const title = ROLE_TITLES[role];
+		if (!title) {
+			return objectResult({ ok: false, error: "unknown role", role, valid: Object.keys(ROLE_TITLES) });
+		}
+		return objectResult({ ok: true, role, title, prompt: ROLE_PROMPTS[role] ?? "" });
+	},
+});
+
+const preflightTool = defineTool({
+	name: "infinite_gen4_preflight",
+	label: "环境自检",
+	description:
+		"Pre-flight self-check before starting an engagement: verify required environment variables (e.g. FOFA_KEY), local tool binaries (nmap/nuclei/fscan/gogo/frp/suo5/MSF/tunnel tools from the skill set), and external infrastructure (VPS for reverse shells). Returns available/broken lists with what each broken item is missing. Run this once before claiming a capability works. Ported from dsh-purge redteam_preflight.",
+	parameters: Type.Object({}),
+	async execute() {
+		const { execFileSync } = await import("node:child_process");
+
+		// 1. 环境变量检查（技能所需的外部服务密钥）
+		const envChecks: Array<{ key: string; usedBy: string }> = [
+			{ key: "FOFA_KEY", usedBy: "fofa-recon（FOFA 资产测绘）" },
+			{ key: "FOFA_EMAIL", usedBy: "fofa-recon（FOFA 账号）" },
+			{ key: "VPS_HOST", usedBy: "vps-reverse-shell / frp-tunnel / shell-handler" },
+		];
+		const envStatus = envChecks.map((c) => ({
+			key: c.key,
+			usedBy: c.usedBy,
+			present: Boolean(process.env[c.key]),
+		}));
+
+		// 2. 本机工具检查（which/command -v）
+		const toolChecks = ["nmap", "nuclei", "fscan", "gogo", "frp", "chisel", "suo5", "sqlmap", "ffuf", "hydra", "rg"];
+		const toolStatus = toolChecks.map((bin) => {
+			let path = "";
+			try {
+				path = execFileSync("sh", ["-c", `command -v ${bin} 2>/dev/null`], {
+					encoding: "utf8",
+					timeout: 5000,
+				}).trim();
+			} catch {
+				path = "";
+			}
+			return { bin, present: path.length > 0, path };
+		});
+
+		const available = [
+			...envStatus.filter((e) => e.present).map((e) => `env:${e.key}`),
+			...toolStatus.filter((t) => t.present).map((t) => `bin:${t.bin}`),
+		];
+		const broken = [
+			...envStatus
+				.filter((e) => !e.present)
+				.map((e) => ({ item: `env:${e.key}`, usedBy: e.usedBy, fix: `导出 ${e.key}，或跳过依赖它的技能` })),
+			...toolStatus
+				.filter((t) => !t.present)
+				.map((t) => ({
+					item: `bin:${t.bin}`,
+					usedBy: "对应技能",
+					fix: `安装 ${t.bin}（brew install / go install）`,
+				})),
+		];
+
+		return objectResult({
+			ok: true,
+			platform: `${process.platform}-${process.arch}`,
+			cwd: process.cwd(),
+			availableCount: available.length,
+			brokenCount: broken.length,
+			env: envStatus,
+			tools: toolStatus,
+			broken,
+			note: "缺 key / 缺 VPS / 缺二进制时，直接向用户说明缺什么，不要假装能跑。",
+		});
+	},
+});
+
 // ---- 剩余 8 个工具（自包含实现，不依赖缺失的 scripts/lib）----
 
 const profile41Tool = defineTool({
@@ -620,6 +755,9 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 	pi.registerTool(encodeTool);
 	pi.registerTool(knowledgeTool);
 	pi.registerTool(specialistsTool);
+	pi.registerTool(rolesTool);
+	pi.registerTool(rolePromptTool);
+	pi.registerTool(preflightTool);
 	pi.registerTool(profile41Tool);
 	pi.registerTool(trainerLaneTool);
 	pi.registerTool(shallowNsfwTool);
