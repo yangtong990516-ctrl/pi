@@ -340,12 +340,26 @@ node dist/cli.js \
 | 技能 | `~/.pi/agent/skills/redteam-*/SKILL.md` | ✅ 23 个 |
 | 工具 | extension 内注册 | ✅ 12 个 `infinite_gen4_*` |
 
-### 7.2 🔴 已知缺陷（必须修复）
+### 7.2 缺陷登记
 
-| # | 缺陷 | 影响 | 修复动作 |
-|---|---|---|---|
-| **BUG-1** | 5 个 `redteam-*` 知识库文件**只提交到源码，未部署到全局** | `infinite_gen4_knowledge` 工具查 `redteam-recon` 等 topic 会失败 | `cp` 源码 knowledge/*.md → 部署目录 |
-| **BUG-2** | 部署目录 `index.json` 未更新（28 vs 33） | 同上 | 同步 index.json |
+#### ✅ BUG-1 / BUG-2（已修复 · 2026-09-29）
+
+| # | 缺陷 | 影响 | 修复动作 | 状态 |
+|---|---|---|---|---|
+| **BUG-1** | 5 个 `redteam-*` 知识库文件只提交到源码，未部署到全局 | `infinite_gen4_knowledge` 工具查 `redteam-recon` 等 topic 会失败 | `cp` 源码 `knowledge/*` → 部署目录 | ✅ **已修复** |
+| **BUG-2** | 部署目录 `index.json` 未更新（28 vs 33） | 同上 | 同步 index.json | ✅ **已修复** |
+
+**修复验证**（实测）：
+```bash
+node dist/cli.js --provider xiaobai --model deepseek-v4.1-flash --print \
+  --no-extensions --thinking low --system-prompt "base" \
+  -e ~/.pi/agent/extensions/infinite-gen-4/index.ts \
+  "调用 infinite_gen4_knowledge 工具，topic 用 redteam-recon"
+# 返回: found: true，成功读到 "# redteam-recon" 内容
+```
+部署目录 topic 数：28 → **33** ✅
+
+> ⚠️ **教训**：`cp` 时只覆盖了 `index.ts` 和 `prompts/`，漏了 `knowledge/` 目录。**同步脚本必须整个 assets 目录递归复制**（见第 10 章复现命令）。
 
 ### 7.3 DSH package 侧（参照物）
 
@@ -393,7 +407,7 @@ node -e 'import("./lib/table-read.js").then(m=>{const t=m.openSlot();require("fs
 
 | # | 任务 | 依赖 | 优先级 | 状态 |
 |---|---|---|---|---|
-| **T1** | 修复 BUG-1/BUG-2（部署 redteam-* 知识库）| 无 | 🔴 P0 | ⬜ 未开始 |
+| **T1** | 修复 BUG-1/BUG-2（部署 redteam-* 知识库）| 无 | 🔴 P0 | ✅ **已完成** |
 | **T2** | 改造：`forceSystemPrompt` → `sections` 注入 | 无 | 🔴 P0 | ⬜ 未开始 |
 | **T3** | 测试：sections 方式下 skills 索引共存 + 破甲率 | T2 | 🔴 P0 | ⬜ 未开始 |
 | **T4** | 移植 `unrestricted-executor` + 2 档位文件 | 无 | 🟡 P1 | ⬜ 未开始 |
@@ -412,6 +426,8 @@ node -e 'import("./lib/table-read.js").then(m=>{const t=m.openSlot();require("fs
 | D4 | 标注 reasoning_effort 剥离为待定状态 | - | `343073191` |
 | D5 | 融合 dsh-purge 人格帧（破甲率 100%）| - | `a17dbacef` |
 | D6 | 移植 23 个红队技能 + 5 个知识库 topic | - | `76fc1b795` |
+| D7 | 沉淀权威技术文档 ARMOR-SYSTEM.md | 2026-09-29 | `a71ef704d` |
+| D8 | 修复 BUG-1/BUG-2（部署 redteam-* 知识库）| 2026-09-29 | *待提交* |
 
 ---
 
@@ -531,6 +547,7 @@ npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-09-29 | 初版：全量沉淀三方对比、测试协议、决策记录、任务清单 |
+| v1.0.1 | 2026-09-29 | 修复 BUG-1/BUG-2（部署 redteam-* 知识库至全局，topic 28→33）；T1 关闭 |
 
 ---
 
