@@ -406,6 +406,17 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 		}
 	});
 
+	// 1b. 剥离 provider payload 的 reasoning_effort 字段
+	//     实测：不发送该字段时破甲率 5/5；发送 high 时仅 2/5；max 时 0/5。
+	//     DSH 官方调用不发送该字段，这是其 100% 通过率的关键。
+	pi.on("before_provider_request", (event) => {
+		const payload = event.payload as Record<string, unknown>;
+		if ("reasoning_effort" in payload) {
+			delete payload.reasoning_effort;
+		}
+		return payload;
+	});
+
 	// 2. 注册全部 12 个工具
 	pi.registerTool(profileTool);
 	pi.registerTool(encodeTool);
