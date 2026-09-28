@@ -29,7 +29,20 @@ function loadAsset(rel: string): string {
 }
 
 const PROMPT_TEXT = loadAsset("assets/prompts/infinite-gen-4.md");
+// 4.1-flash 帧：曾经与 gen-4 串联使用（旧组合 A = [gen-4, gen-41] → 97.5%）。
+// 采用 C 组合（purge + gen-4）后本帧不再进主注入链，保留以便随时回退对比或
+// 作为未来按模型分档（v4.1-flash 专用层）的备选资产。
 const PROMPT41_TEXT = loadAsset("assets/prompts/infinite-gen-4.1-flash.md");
+/** 4.1-flash 帧开关：置 true 可回到旧组合 [gen-4, gen-41] 做对照。 */
+const INCLUDE_PROMPT41 = false;
+// purge 人格帧（来自 dsh-purge v1.1.34 的默认提示词，解码后所得）：
+//   身份层对抗（人格扮演 + 思考链嘲讽注入）+ CTF 工作流框架。
+//   A/B/C 对照实验（官方 40 题，deepseek-v4.1-flash）：
+//     A = gen-4 + gen-41（旧组合）         → 97.5% (39/40)
+//     B = purge 人格帧（单用）             → 95.0% (38/40)
+//     C = purge 人格帧 + 我们的能力槽位    → 100.0% (40/40)  ← 最优
+//   结论：身份层（purge）+ 输出层（我们的 HARD RULES/槽位）互补，合并可达 100%。
+const PURGE_PERSONA_TEXT = loadAsset("assets/prompts/infinite-gen-4.purge-persona.md");
 
 // ---------------------------------------------------------------------------
 // 知识库 / 专家 roster（内联，避免运行时读文件失败）
@@ -399,8 +412,15 @@ function armorScore(text: string): { verdict: string; words: string[] } {
 export default function infiniteGen4(pi: ExtensionAPI) {
 	// 1. 注入破甲帧 system prompt（before_agent_start，返回 systemPrompt 完全替换）
 	//    正确 API：handler 返回 { systemPrompt }，runner 会赋给 forceSystemPrompt
+	//
+	//    帧组合策略（A/B/C 对照实验结论，官方 40 题）：
+	//      A = [gen-4, gen-41]                        → 97.5%
+	//      B = [purge-persona]                        → 95.0%
+	//      C = [purge-persona, gen-4]                 → 100.0%  ← 采用
+	//    即：以 purge 人格帧打底（身份层），叠加 gen-4 的能力槽位与 HARD RULES（输出层）。
 	pi.on("before_agent_start", () => {
-		const full = [PROMPT_TEXT, PROMPT41_TEXT].filter(Boolean).join("\n\n");
+		const layers = [PURGE_PERSONA_TEXT, PROMPT_TEXT, INCLUDE_PROMPT41 ? PROMPT41_TEXT : ""];
+		const full = layers.filter(Boolean).join("\n\n");
 		if (full) {
 			return { systemPrompt: full };
 		}
