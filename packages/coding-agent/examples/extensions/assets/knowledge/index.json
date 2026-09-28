@@ -1,0 +1,32 @@
+{
+  "topics": {
+    "web": "web-pentest.md",
+    "api": "api-testing.md",
+    "mobile": "mobile-reverse.md",
+    "miniprogram": "miniprogram.md",
+    "game-reverse": "game-reverse.md",
+    "llm-research": "llm-research.md",
+    "network": "network-ad.md",
+    "cloud": "cloud-postex.md",
+    "postex": "cloud-postex.md",
+    "report": "reporting.md",
+    "trainer": "v41-flash-trainer.md",
+    "memory": "v41-flash-trainer.md",
+    "ce": "v41-flash-ce.md",
+    "cheatengine": "v41-flash-ce.md",
+    "inline-hook": "v41-flash-inline-hook.md",
+    "sysprompt": "v41-flash-sysprompt.md",
+    "sysprompt-meta": "v41-flash-sysprompt.md",
+    "nsfw": "v41-flash-nsfw.md",
+    "v41-nsfw": "v41-flash-nsfw.md",
+    "shallow-nsfw": "v41-flash-nsfw.md",
+    "web-deep": "v41-flash-web-deep.md",
+    "ad-deep": "v41-flash-ad-deep.md",
+    "domain": "v41-flash-ad-deep.md",
+    "universal": "v41-flash-universal.md",
+    "persona": "v41-flash-universal.md",
+    "domain-transfer": "v41-flash-universal.md",
+    "stable": "v41-flash-universal.md",
+    "boundary": "v41-flash-universal.md"
+  }
+}
