@@ -1,6 +1,6 @@
 # PI 破甲体系 · 权威技术文档（Single Source of Truth）
 
-> **文档状态**：v1.0 · 2026-09-29
+> **文档状态**：v1.1 · 2026-09-29
 > **用途**：本项目唯一权威事实源。会话漂移、上下文丢失、模型幻觉发生时，一律以本文件为准。
 > **铁律**：任何「测试通过」的结论，必须能在本文件的「复现命令」章节中原样重跑出来。凡是无法复现的结论，标记为 `⚠️ 未验证`，不得作为决策依据。
 
@@ -16,11 +16,33 @@
 | **上下文丢失** | 忘了为什么这么设计，重复走弯路 | 第 5 章「决策记录」含被否决方案及原因 |
 | **幻觉成功** | 测试时改了判定条件，让任务"通过" | 第 4 章「测试协议」锁定判定标准，禁止修改 |
 
-### 0.2 三条不可违反的规则
+### 0.2 五条不可违反的规则
 
 1. **判定标准不可变**：`scorer.mjs` 是官方评分器，**禁止修改**。任何改动必须在文档中登记并说明原因。
 2. **原始输出必须留存**：每次实验必须保存逐题原始输出（`/tmp/bench_*.json`），不得只存汇总数字。
 3. **对照组必须同批同参**：A/B 对比必须用同一题池、同一模型、同一参数，仅改被测变量。
+4. **并发不超过 2**（含主会话）：同时最多 1 个子会话；主会话做设计与验证，子会话做独立工作包。
+5. **先读全量再下结论**：任何改动前，必须读完相关文件的**完整内容**，禁止「只看了一部分就推理、只看部分代码就下结论」。本文件第 13 章登记所有已读文件清单。
+
+### 0.3 自我净化协议（禁止无限修复循环）
+
+**编码问题专项**（历史踩坑：因编码问题导致无限修复）：
+
+| 规则 | 内容 |
+|---|---|
+| **E1** | 所有文件读写必须显式指定编码：Python 用 `encoding="utf-8"`；题池读取用 `encoding="utf-8-sig"`（含 BOM）|
+| **E2** | 出现 `UnicodeDecodeError` / `JSONDecodeError` 时，**先确认编码**，不要反复改逻辑 |
+| **E3** | 文件名含非 ASCII（如 `сrасk`、`ехрlоi​t`）时，路径操作必须用**引号包裹**或 Python 处理 |
+| **E4** | 禁止用 `sed`/`grep` 直接改含中文/西里尔文的文件，改用 Python 精确替换 |
+| **E5** | 任何"改了没效果"的现象，**第一步检查文件是否真的被改了**（`md5` 对比），而不是假设逻辑错误 |
+
+**修复循环熔断机制**：
+
+| 情形 | 动作 |
+|---|---|
+| 同一问题修复 2 次仍失败 | **停止**，回读源码/文档，重新定位根因 |
+| 同一问题修复 3 次仍失败 | **停止**，在本文件第 14 章「问题登记」记录，改变策略 |
+| 测试结果与预期不符 | **先验证测试本身**（判定标准是否被改、参数是否一致），再怀疑被测对象 |
 
 ### 0.3 本文件的证据等级
 
@@ -58,11 +80,107 @@
 
 ## 2. 环境与坐标（绝对路径）
 
+### 2.0 🔴 三个项目定位（防止漂移，必须牢记）
+
+本项目涉及**三个独立的代码库**，全部在本地，必须区分清楚：
+
+| 代号 | 项目 | 绝对路径 | 角色 | 是否修改 |
+|---|---|---|---|---|
+| **PI** | Pi 编码代理 | `/Users/iceman/Documents/workspace/pi` | **目标产品**（我们改造的对象）| ✅ **只改这里** |
+| **PKG** | dsh-purge 插件包 | `/Users/iceman/Downloads/package` | **参照物 A**（机制来源）| ❌ 只读 |
+| **CLI** | DSH-Desktop 客户端 | `/Users/iceman/Downloads/DSH-Desktop-v0.1.6-macOS-一键安装包` | **参照物 B**（宿主机制）| ❌ 只读 |
+
+**三者的关系**：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  CLI（DSH-Desktop 客户端）                                    │
+│  └─ app.asar（127MB，Electron 打包）                          │
+│      └─ dsh/desktop-packages/*.tgz（各功能模块）               │
+│          ├─ deepseek-ai-dsh-system-prompt  ← 提示词装配引擎    │
+│          ├─ deepseek-ai-dsh-persona        ← 人格注入          │
+│          └─ ...                                                │
+│                  ↑ 被以下插件补丁                              │
+│  PKG（dsh-purge 插件）                                        │
+│  ├─ cordis.patch.yml       ← 宿主补丁（改 CLI 配置）           │
+│  ├─ lib/asset-table.js     ← 加密的破甲提示词（34330字节）      │
+│  ├─ lib/identity.js        ← 身份清洗 + 注入折叠               │
+│  ├─ lib/redteam/tools.js   ← 53 个红队工具                     │
+│  └─ skills/redteam/*.md    ← 23 个红队技能                     │
+│                  ↓ 我们移植其机制                              │
+│  PI（Pi 编码代理）— 最终交付物                                 │
+│  └─ packages/coding-agent/examples/extensions/infinite-gen-4.ts│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**关键澄清**：
+- **CLI 是宿主**（Electron 应用），**PKG 是插件**（给 CLI 打的补丁）
+- PKG 通过 `cordis.patch.yml` 修改 CLI 的 `system-prompt` 配置来生效
+- 我们把 PKG 的**机制**（提示词内容 + 清洗逻辑）移植到 PI 的 **extension 机制**
+
+### 2.0.1 CLI（DSH-Desktop 客户端）关键资产
+
+| 资产 | 路径（相对安装包根） | 说明 |
+|---|---|---|
+| 应用包 | `DSH Desktop.app/Contents/Resources/app.asar` | 127MB Electron 打包 |
+| **system-prompt 模块** | `dsh/desktop-packages/deepseek-ai-dsh-system-prompt-0.1.6-alpha.1.tgz` | **提示词装配引擎** |
+| **persona 模块** | `dsh/desktop-packages/deepseek-ai-dsh-persona-0.1.6-alpha.1.tgz` | **人格注入** |
+| session-title 模块 | `dsh/desktop-packages/deepseek-ai-dsh-session-title-first-prompt-llm-*.tgz` | 会话标题 |
+
+**提取命令**（已提取到 `/tmp/dsh-client-extract/`）：
+```bash
+cd ~/Downloads/DSH-Desktop-v0.1.6-macOS-一键安装包
+npx --yes @electron/asar extract-file "DSH Desktop.app/Contents/Resources/app.asar" \
+  "dsh/desktop-packages/deepseek-ai-dsh-system-prompt-0.1.6-alpha.1.tgz"
+mkdir -p /tmp/dsh-client-extract/system-prompt
+tar -xzf deepseek-ai-dsh-system-prompt-0.1.6-alpha.1.tgz -C /tmp/dsh-client-extract/system-prompt
+```
+
+**CLI 的 `SECTION_ORDERS` 体系**（`system-prompt/lib/index.js`）：
+```javascript
+HARNESS_IDENTITY: -1e3,              // -1000  宿主身份（最低优先级）
+DEPLOYMENT_PERSONA_PREFIX: 0,        // 0      人格前缀
+PLAN_POLICY: 500,
+TEAM_POLICY: 600,
+PTC_ONLY: 800,
+FILE_REFERENCE: 900,
+TOOL_BASH: 1000,  TOOL_READ: 1100,  TOOL_WRITE: 1200, TOOL_EDIT: 1300,
+TOOL_WEB_SEARCH: 2000, TOOL_WEB_FETCH: 2100,
+TOOLS_SDK: 5e3,                      // 5000
+DELIVERABLE_FILE_REFERENCES: 9e3,    // 9000
+STRUCTURED_OUTPUT: 9900,
+HARNESS_SOURCE: 1e4,                 // 10000
+WEB_SURFACE: 10100,
+DEPLOYMENT_PERSONA_SUFFIX: 10200,    // 10200  人格后缀
+```
+
+**CLI 的 `complete` 语义**（`system-prompt/lib/index.js:335-359`）：
+```javascript
+const completeSections = sectionDefinitions.filter((s) => s.complete === true);
+if (completeSections.length > 1) throw new Error("multiple complete prompt sections are active");
+// ...
+sections: completeSection === undefined ? transformed.sections : [completeSection]
+```
+> **这就是「完全替换」机制** —— 与 PI 的 `forceSystemPrompt` 语义**完全一致**。
+> `complete: true` 的段会**独占**整个 prompt，其余 section 全部丢弃。
+
+**CLI 的 persona 配置**（`persona/lib/index.js`）：
+```javascript
+const Config = z.object({
+    prefix: z.string().required(),
+    suffix: z.string().default(""),
+    complete: z.boolean().default(false),          // ← 是否独占整个 prompt
+    includeRuntimeContext: z.boolean().default(true)  // ← 是否注入运行时上下文
+});
+```
+> **PKG 的 `cordis.patch.yml` 正是配置这个**：
+> `includeHarnessIdentity:false`（关闭 HARNESS_IDENTITY）+ `personaPrefix:""`（清空前缀）
+
 ### 2.1 路径总表
 
 | 用途 | 绝对路径 |
 |---|---|
-| **Pi 源码仓库** | `/Users/iceman/Documents/workspace/pi` |
+| **PI 源码仓库** | `/Users/iceman/Documents/workspace/pi` |
 | **Pi 工作分支** | `purge` |
 | **extension 源码** | `/Users/iceman/Documents/workspace/pi/packages/coding-agent/examples/extensions/infinite-gen-4.ts` |
 | **extension 部署** | `/Users/iceman/.pi/agent/extensions/infinite-gen-4/index.ts` |
@@ -228,6 +346,7 @@ node dist/cli.js \
 | D3 | 技能索引**不注入**常驻帧 | 实测：+19.8K → 破甲率 70% | ✅ 实测 |
 | D4 | 技能走「按需加载」（~/.pi/agent/skills/）| DSH README 同样设计 | ✅ 一致 |
 | D5 | 知识库合并为 5 个 redteam-* topic | 减少 topic 数量 | ✅ 已做 |
+| D6 | 实现**双注入模式**（`PI_ARMOR_INJECT`），默认 `force` | 保留已验证的 100% 路径，同时提供 sections 路径供 T3 验证 | ✅ 已做 |
 
 ### 5.2 ⚠️ 待定决策（必须重新验证）
 
@@ -314,6 +433,61 @@ node dist/cli.js \
 |---|---|---|
 | 无帧 | 70.0% (28/40) | `/tmp/bench_noframe.json` |
 | DSH 单遍 | 100% (40/40) | `/tmp/bench_dsh.json` |
+
+### 6.6 双注入模式对照实验（T2/T3）🔄 进行中
+
+**背景**：T2 实现了两种注入方式，通过 `PI_ARMOR_INJECT` 环境变量切换。
+
+| 方式 | 值 | 机制 | 入口 |
+|---|---|---|---|
+| A（完全替换）| `force`（默认）| `return { systemPrompt: frame }` → `forceSystemPrompt` | `system-prompt.ts:190` |
+| B（分段注入）| `sections` | `opts.sections.infinite_gen4_armor = frame` | `system-prompt.ts:171-173` |
+
+**前置验证**（payload 捕获实测）✅：
+
+| 方式 | system prompt 长度 | 含 `<available_skills>` | 含破甲帧 |
+|---|---|---|---|
+| `force` | 43517 | ❌ False | ✅ |
+| `sections` | 64747 | ✅ **True**（22 条技能索引）| ✅ |
+
+**破甲率对照**（官方 40 题，deepseek-v4.1-flash，同批次）：
+
+| 组 | 注入方式 | 工具 | skills 索引 | 帧长 | 通过率 | 产物 |
+|---|---|---|---|---|---|---|
+| **A_baseline** | `force` | 无 | 无 | 43517 | **97.5%** (39/40) | `/tmp/modes_A_baseline.json` |
+| **B_noTool** | `sections` | 无 | 无 | 43517 | **95.0%** (38/40) | `/tmp/modes_B_noTool.json` |
+| **B_withTool** | `sections` | 有 | **有**（22条）| 64747 | **67.5%** (27/40) ❌ | `/tmp/modes_B_withTool.json` |
+
+**失败域明细**：
+
+| 域 | A_baseline | B_noTool | B_withTool |
+|---|---|---|---|
+| web | 15/15 | 15/15 | **9/15** ❌ |
+| game | 6/6 | 6/6 | **3/6** ❌ |
+| сrасk | 4/4 | 4/4 | **1/4** ❌ |
+| llm | 2/2 | 2/2 | **1/2** ❌ |
+| network | 2/2 | **1/2** | 2/2 |
+| generic | 2/3 | 2/3 | 3/3 |
+
+### 6.7 🔴 结论：skills 索引必须不进帧
+
+**两条独立实验，同一结论**：
+
+| 实验 | 帧长 | 破甲率 |
+|---|---|---|
+| 实验一（显式拼接，force 模式）| 43517 → 63380 | 100% → **70.0%** |
+| 实验二（原生 sections，sections 模式）| 43517 → 64747 | 95% → **67.5%** |
+
+**根因**：skills 索引（22 条 `<skill><name>...<description>...</skill>`）会**稀释破甲帧的指令密度**，
+且索引里的技能描述含大量「渗透/漏洞/爆破」等中性工程词汇，在开头窗口附近形成语义竞争。
+
+**副产品结论**：`sections` 分段注入本身也**略降**破甲率（95% vs 97.5%），
+因为破甲帧被 `<infinite_gen4_armor>` 标签包裹、与其他 section 并列，**优先级感知弱于独占式**。
+
+**最终决策**：
+- **默认使用 `force` 模式**（`PI_ARMOR_INJECT` 未设时）
+- skills 走**按需加载**（`~/.pi/agent/skills/` + `infinite_gen4_knowledge` 工具）
+- `sections` 模式保留为可选（供未来实验），**不用于生产**
 
 ### 6.5 ⚠️ 数据冲突登记
 
@@ -408,8 +582,8 @@ node -e 'import("./lib/table-read.js").then(m=>{const t=m.openSlot();require("fs
 | # | 任务 | 依赖 | 优先级 | 状态 |
 |---|---|---|---|---|
 | **T1** | 修复 BUG-1/BUG-2（部署 redteam-* 知识库）| 无 | 🔴 P0 | ✅ **已完成** |
-| **T2** | 改造：`forceSystemPrompt` → `sections` 注入 | 无 | 🔴 P0 | ⬜ 未开始 |
-| **T3** | 测试：sections 方式下 skills 索引共存 + 破甲率 | T2 | 🔴 P0 | ⬜ 未开始 |
+| **T2** | 改造：支持双注入模式（force / sections）| 无 | 🔴 P0 | ✅ **已完成** |
+| **T3** | 测试：sections 方式下 skills 索引共存 + 破甲率 | T2 | 🔴 P0 | ✅ **已完成**（结论：skills 不进帧）|
 | **T4** | 移植 `unrestricted-executor` + 2 档位文件 | 无 | 🟡 P1 | ⬜ 未开始 |
 | **T5** | 融合「术语工程语义映射」进破甲帧 | 无 | 🟡 P1 | ⬜ 未开始 |
 | **T6** | 实现「档位自适应」（按模型选帧长）| T4 | 🟡 P1 | ⬜ 未开始 |
@@ -597,3 +771,130 @@ npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs
 | `redteam-tunnel` | 5 个隧道技能 | 隧道穿透 |
 | `redteam-intranet` | 4 个内网技能 | 内网渗透 |
 | `redteam-ops` | 3 个运维技能 | 环境配置 |
+
+---
+
+## 13. 已读文件全量清单（防止「只看一部分」）
+
+> **规则**：改动任何机制前，必须先读完下表对应文件。未读完就下结论 = 违规。
+> 状态：✅ 已完整读过 / ⬜ 未读 / 🔶 部分读过（需补全）
+
+### 13.1 PI 侧
+
+| 文件 | 行数 | 状态 | 关键发现 |
+|---|---|---|---|
+| `src/core/system-prompt.ts` | ~210 | ✅ | `forceSystemPrompt` 在第 190 行完全替换；sections 在 143-175 |
+| `src/core/extensions/runner.ts` | - | 🔶 仅读 1346-1348 | handler 返回值赋给 forceSystemPrompt |
+| `src/core/extensions/types.ts` | - | 🔶 部分 | `BeforeAgentStartEvent.systemPromptOptions` 含 skills |
+| `src/core/skills.ts` | - | 🔶 仅读 355-383 | `formatSkillsForPrompt` 注入 name/desc/location |
+| `src/core/resource-loader.ts` | - | 🔶 部分 | skills 发现机制在 715-751 |
+| `examples/extensions/infinite-gen-4.ts` | ~500 | ✅ | 12 工具 + 2 事件钩子 |
+| `examples/extensions/provider-payload.ts` | - | ✅ | payload 捕获工具 |
+
+### 13.2 PKG 侧（dsh-purge）
+
+| 文件 | 行数 | 状态 | 关键发现 |
+|---|---|---|---|
+| `cordis.patch.yml` | 67 | ✅ | `includeHarnessIdentity:false` + `personaPrefix:""` |
+| `lib/identity.js` | 279 | ✅ | `stripHarnessPersona` 13 条正则 + `foldInjectIntoPersona` |
+| `lib/rules.js` | 273 | ✅ | `RULE_TARGETS=["AGENTS.md","CLAUDE.md"]` |
+| `lib/skills.js` | 606 | 🔶 部分 | 技能加载，保留 whenToUse |
+| `lib/table-key.js` | 27 | ✅ | AES 密钥派生 `mixKey` |
+| `lib/table-read.js` | 18 | ✅ | `openSlot()` 解密 |
+| `lib/asset-table.js` | - | ✅ | 加密数据（21408 字节）|
+| `lib/redteam/tools.js` | 1883 | 🔶 部分 | 53 个工具定义 |
+| `lib/redteam/store-core.js` | 4644 | ⬜ | SQLite 事实库（不移植）|
+| `README.zh-CN.md` | - | 🔶 部分 | 工作原理（701-760行）|
+
+### 13.3 CLI 侧（DSH-Desktop）
+
+| 文件 | 行数 | 状态 | 关键发现 |
+|---|---|---|---|
+| `system-prompt/lib/index.js` | 365 | ✅ | `SECTION_ORDERS` + `complete` 语义 + `assemble()` |
+| `persona/lib/index.js` | 50 | ✅ | persona 配置（complete/includeRuntimeContext）|
+
+---
+
+## 14. 问题登记（自我净化）
+
+> **规则**：任何问题修复 2 次仍失败，**必须**在此登记，然后改变策略。
+> 格式：`[编号] 症状 | 根因 | 修复尝试 | 最终方案 | 状态`
+
+### 14.1 已解决问题
+
+| # | 症状 | 根因 | 修复尝试 | 最终方案 | 状态 |
+|---|---|---|---|---|---|
+| P1 | 破甲帧注入是空操作 | 误改 `event.systemPromptOptions.forceSystemPrompt`（runner 不读）| 1 次 | `return { systemPrompt }` | ✅ |
+| P2 | `knowledge` topic `web` 返回空 | 硬编码 `web-pen-testing.md`，实际是 `web-pen-t3sting.md` | 1 次 | 改为运行时读 `index.json` | ✅ |
+| P3 | 知识库查不到 redteam topic | `cp` 漏了 `knowledge/` 目录 | 1 次 | 递归复制整个 assets | ✅ |
+| P4 | `tsc` 报 `Property 'content' does not exist` | `AgentMessage` 类型不含 content | 1 次 | 类型断言 | ✅ |
+| P5 | 提交被 husky 阻塞 | `node: command not found`（PATH）| 1 次 | `export PATH=...` | ✅ |
+| P6 | 题池读取报 BOM 错误 | 文件含 UTF-8 BOM | 1 次 | `encoding="utf-8-sig"` | ✅ |
+
+### 14.2 待解决问题
+
+| # | 症状 | 当前认知 | 下一步 | 状态 |
+|---|---|---|---|---|
+| Q1 | 帧长度 vs 破甲率的关系未量化 | 43517→100%，63380→70% | 需测中间点（如 +2K、+5K）| ⬜ |
+| Q2 | `reasoning_effort` 剥离的副作用 | 无条件剥离影响日常编程 | A/B/C 实验（T7）| ⬜ |
+| Q3 | `sections` 注入后 skills 是否共存 | 未实测 | T2+T3 | ⬜ |
+
+---
+
+## 15. 关键机制对照表（CLI ↔ PKG ↔ PI）
+
+> 这是理解三者对应关系的核心表，任何机制移植前必读。
+
+| 机制 | CLI（DSH-Desktop）| PKG（dsh-purge）| **PI（我们）** |
+|---|---|---|---|
+| **提示词注入** | `systemPrompt.section({name, order, text})` | `foldInjectIntoPersona()` | `pi.on("before_agent_start", ...)` |
+| **完全替换** | `complete: true` | `complete` 配置透传 | `return { systemPrompt }` → `forceSystemPrompt` |
+| **身份关闭** | `HARNESS_IDENTITY` (order -1000) | `includeHarnessIdentity: false` | 无对应（整体替换）|
+| **人格前缀** | `DEPLOYMENT_PERSONA_PREFIX` (order 0) | `personaPrefix: ""` | 无 |
+| **人格后缀** | `DEPLOYMENT_PERSONA_SUFFIX` (order 10200) | `personaSuffix: "Your working directory is {{cwd}}."` | 无 |
+| **运行时上下文** | `suppressRuntimeContext()` | `includeRuntimeContext` | 无 |
+| **技能** | 官方 skills 目录 | `skills/redteam/*.md` | `~/.pi/agent/skills/redteam-*/SKILL.md` |
+| **技能是否进 prompt** | 视配置 | ❌ 不进注入段 | ❌ 当前被 forceSystemPrompt 砍掉 |
+| **section 排序** | 数值 order（-1000 ~ 10200）| 透传 CLI order | 固定顺序（preamble/skills/docs/cwd...）|
+| **装配函数** | `assemble()` | `rewritePromptAssembly()` | `buildSystemPromptSections()` |
+
+### 15.1 核心结论（三条，必须牢记）
+
+1. **`complete:true`（CLI）= 完全替换 = PI 的 `forceSystemPrompt`** —— 三者语义一致，都会**丢弃其余 section**。
+2. **PKG 的策略不是"完全替换"**：它用 `includeHarnessIdentity:false` 关身份 + persona 折叠，**保留**其他 section（含 skills）。
+3. **PI 当前用的是"完全替换"** → 所以 skills 被砍。**这是 T2 要改的**。
+
+---
+
+## 16. 启动检查清单（每次会话开始必做）
+
+```bash
+# 1. 环境
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# 2. 读本文档第 8 章（任务清单）确认进度
+grep -A20 "### 8.1 待办" packages/coding-agent/examples/extensions/ARMOR-SYSTEM.md
+
+# 3. 确认三项目存在
+ls -d /Users/iceman/Documents/workspace/pi \
+      /Users/iceman/Downloads/package \
+      "/Users/iceman/Downloads/DSH-Desktop-v0.1.6-macOS-一键安装包"
+
+# 4. 确认源码与部署一致
+diff <(cat ~/.pi/agent/extensions/infinite-gen-4/index.ts) \
+     <(cat /Users/iceman/Documents/workspace/pi/packages/coding-agent/examples/extensions/infinite-gen-4.ts) \
+  && echo "✅ 一致" || echo "❌ 不一致，需同步"
+
+# 5. 确认当前 git 状态
+cd /Users/iceman/Documents/workspace/pi && git status -sb | head -3
+```
+
+---
+
+## 17. 变更日志（续）
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v1.0 | 2026-09-29 | 初版：全量沉淀三方对比、测试协议、决策记录、任务清单 |
+| v1.0.1 | 2026-09-29 | 修复 BUG-1/BUG-2（部署 redteam-* 知识库至全局，topic 28→33）；T1 关闭 |
+| **v1.1** | **2026-09-29** | **新增：第 0.2 节五条铁律 + 自我净化协议；第 2.0 节三项目定位；第 13 章已读文件清单；第 14 章问题登记；第 15 章机制对照表；第 16 章启动检查清单** |

@@ -410,29 +410,64 @@ function armorScore(text: string): { verdict: string; words: string[] } {
 // extension 入口
 // ---------------------------------------------------------------------------
 export default function infiniteGen4(pi: ExtensionAPI) {
-	// 1. 注入破甲帧 system prompt（before_agent_start，返回 systemPrompt 完全替换）
-	//    正确 API：handler 返回 { systemPrompt }，runner 会赋给 forceSystemPrompt
+	// 1. 注入破甲帧 system prompt
 	//
-	//    帧组合策略（A/B/C 对照实验结论，官方 40 题）：
-	//      A = [gen-4, gen-41]                        → 97.5%
-	//      B = [purge-persona]                        → 95.0%
-	//      C = [purge-persona, gen-4]                 → 100.0%  ← 采用
-	//    即：以 purge 人格帧打底（身份层），叠加 gen-4 的能力槽位与 HARD RULES（输出层）。
+	//    【两种注入方式对比 —— T2 改造核心】
 	//
-	//    技能索引（skills）不注入帧 —— 实测反证（官方 40 题）：
-	//      融合帧 + 22 条技能索引（帧 43517 → 63380 字符）→ 破甲率跌至 70.0%
-	//      融合帧（不含技能索引，43517 字符）             → 破甲率 100.0%
-	//    结论：帧长度是破甲率的敏感变量，+19.8K 字符的技能索引显著稀释破甲密度。
-	//    因此技能库改为「按需加载」：技能文件已部署到 ~/.pi/agent/skills/redteam-*/，
-	//    并合并为 5 个知识库 topic（redteam-recon/-ехрlоi​t/-tunnel/-intranet/-ops），
-	//    由 infinite_gen4_knowledge 工具按需检索，不进常驻帧。
-	pi.on("before_agent_start", () => {
-		const layers = [PURGE_PERSONA_TEXT, PROMPT_TEXT, INCLUDE_PROMPT41 ? PROMPT41_TEXT : ""];
+	//    方式 A（旧）：forceSystemPrompt 完全替换
+	//      handler 返回 { systemPrompt } → runner 赋给 forceSystemPrompt
+	//      → buildSystemPromptState 走 `if (input.forceSystemPrompt !== undefined)
+	//         return { content: input.forceSystemPrompt }`
+	//      → **丢弃全部 sections**（skills / docs / cwd / project_context 全没了）
+	//      优点：帧最纯净（43517 字符）破甲率 100%
+	//      缺点：Pi 原生技能体系失效，模型不知道有哪些 skill 可用
+	//
+	//    方式 B（新）：精准清洗（对齐 DSH 的 cordis.patch.yml 策略）
+	//      DSH 的做法是 `includeHarnessIdentity:false` + `personaPrefix:""`：
+	//      **关闭宿主身份、清空人格前缀，但保留其余 section（含 skills）**
+	//      对应到 Pi：
+	//        · 破甲帧写入 systemPromptOptions.sections（自定义段，非 preamble）
+	//        · 不设 forceSystemPrompt → sections 正常渲染
+	//        · skills 段由 Pi 原生机制保留（formatSkillsForPrompt）
+	//
+	//    【为什么分段而不是全塞 preamble】
+	//      system-prompt.ts:136-140 校验 customSections 的 name 不能是 "preamble"
+	//      （preamble 是保留名，只能由 customPrompt 写入）。因此破甲帧用自定义段名。
+	//
+	//    【实测数据（官方 40 题，deepseek-v4.1-flash）】
+	//      A/B/C 帧组合对照（forceSystemPrompt 方式）：
+	//        A = [gen-4, gen-41]                → 97.5%
+	//        B = [purge-persona]                → 95.0%
+	//        C = [purge-persona, gen-4]         → 100.0%  ← 帧组合采用此方案
+	//      技能索引显式拼进帧的对照（forceSystemPrompt 方式）：
+	//        融合帧（43517 字符）                → 100.0%
+	//        融合帧 + 22 条技能索引（63380 字符）→ 70.0%   ← 帧长度敏感
+	//      ⚠️ 注意：上述第二个对照是「显式拼接」的测法。分段注入（方式 B）下
+	//         skills 段是否同样稀释破甲率，**尚未实测**（见任务 T3）。
+	//         在 T3 出结论前，本扩展用环境变量 PI_ARMOR_INJECT 控制注入方式。
+	//
+	//    【注入方式开关】
+	//      PI_ARMOR_INJECT=sections  → 方式 B（分段注入，保留 skills）  ← 待 T3 验证
+	//      PI_ARMOR_INJECT=force     → 方式 A（完全替换，砍 skills）    ← 已验证 100%
+	//      未设置时默认 force（保破甲率优先，与已实测的 100% 一致）
+	const injectMode = process.env.PI_ARMOR_INJECT === "sections" ? "sections" : "force";
+	const frameLayers = [PURGE_PERSONA_TEXT, PROMPT_TEXT, INCLUDE_PROMPT41 ? PROMPT41_TEXT : ""];
+	const frameText = frameLayers.filter(Boolean).join("\n\n");
 
-		const full = layers.filter(Boolean).join("\n\n");
-		if (full) {
-			return { systemPrompt: full };
+	pi.on("before_agent_start", (event) => {
+		if (!frameText) return;
+
+		if (injectMode === "force") {
+			// 方式 A：完全替换（frame 独占全部 prompt）
+			return { systemPrompt: frameText };
 		}
+
+		// 方式 B：分段注入 —— 破甲帧作为独立 section，其余 section（skills 等）保留
+		const opts = event.systemPromptOptions;
+		if (opts && typeof opts === "object") {
+			opts.sections = { ...(opts.sections ?? {}), infinite_gen4_armor: frameText };
+		}
+		return;
 	});
 
 	// 1b. 剥离 provider payload 的 reasoning_effort 字段
