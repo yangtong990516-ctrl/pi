@@ -407,8 +407,29 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 	});
 
 	// 1b. 剥离 provider payload 的 reasoning_effort 字段
-	//     实测：不发送该字段时破甲率 5/5；发送 high 时仅 2/5；max 时 0/5。
-	//     DSH 官方调用不发送该字段，这是其 100% 通过率的关键。
+	//
+	//     ⚠️ 状态：待定（PENDING REVIEW）—— 这是一项有副作用、尚未定论的临时措施。
+	//
+	//     支持剥离的实测（deepseek-v4.1-flash，同一道 crack 题 ×5，官方 40 题）：
+	//       不发送该字段 → 5/5；medium → 4/5；none → 3/5；minimal → 3/5；
+	//       high → 2/5；low → 1/5；max → 0/5
+	//       官方 40 题：剥离前 87.5% (35/40) → 剥离后 97.5% (39/40)
+	//       DSH 官方调用不发送该字段，这是其 100% 通过率的关键因素之一。
+	//
+	//     副作用（未解决）：本剥离是**无条件**的，会抹平用户所有 --thinking 设置
+	//       （off/minimal/low/medium/high/max 全部被删除字段）。
+	//       后果：日常编程任务需要的高推理能力一并失效。
+	//
+	//     待定原因：dsh-purge 的默认帧（人格扮演 + Σ-1 强制 thinking_level=HIGH）
+	//       走的是相反路线（要求 HIGH 推理），却报告 100% 通过率。
+	//       两种策略孰优尚未用官方 40 题做 A/B/C 对照验证。
+	//
+	//     后续候选方案（尚未实施）：
+	//       A. 按模型条件剥离（只对破甲目标模型剥离，其余模型保留 thinking）
+	//       B. 用环境变量开关（PI_ARMOR_REASONING_STRIP=off|safe|on）
+	//       C. 采用 dsh-purge 人格帧 + HIGH 推理，彻底放弃剥离
+	//
+	//     在 A/B/C 对照实验出结论前，保留当前无条件剥离（以破甲率为优先）。
 	pi.on("before_provider_request", (event) => {
 		const payload = event.payload as Record<string, unknown>;
 		if ("reasoning_effort" in payload) {
