@@ -27,6 +27,11 @@
     "persona": "v41-flash-universal.md",
     "domain-transfer": "v41-flash-universal.md",
     "stable": "v41-flash-universal.md",
-    "boundary": "v41-flash-universal.md"
+    "boundary": "v41-flash-universal.md",
+    "redteam-recon": "redteam-recon.md",
+    "redteam-exploit": "redteam-exploit.md",
+    "redteam-tunnel": "redteam-tunnel.md",
+    "redteam-intranet": "redteam-intranet.md",
+    "redteam-ops": "redteam-ops.md"
   }
 }

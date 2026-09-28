@@ -418,8 +418,17 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 	//      B = [purge-persona]                        → 95.0%
 	//      C = [purge-persona, gen-4]                 → 100.0%  ← 采用
 	//    即：以 purge 人格帧打底（身份层），叠加 gen-4 的能力槽位与 HARD RULES（输出层）。
+	//
+	//    技能索引（skills）不注入帧 —— 实测反证（官方 40 题）：
+	//      融合帧 + 22 条技能索引（帧 43517 → 63380 字符）→ 破甲率跌至 70.0%
+	//      融合帧（不含技能索引，43517 字符）             → 破甲率 100.0%
+	//    结论：帧长度是破甲率的敏感变量，+19.8K 字符的技能索引显著稀释破甲密度。
+	//    因此技能库改为「按需加载」：技能文件已部署到 ~/.pi/agent/skills/redteam-*/，
+	//    并合并为 5 个知识库 topic（redteam-recon/-ехрlоi​t/-tunnel/-intranet/-ops），
+	//    由 infinite_gen4_knowledge 工具按需检索，不进常驻帧。
 	pi.on("before_agent_start", () => {
 		const layers = [PURGE_PERSONA_TEXT, PROMPT_TEXT, INCLUDE_PROMPT41 ? PROMPT41_TEXT : ""];
+
 		const full = layers.filter(Boolean).join("\n\n");
 		if (full) {
 			return { systemPrompt: full };
