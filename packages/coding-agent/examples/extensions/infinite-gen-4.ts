@@ -9,7 +9,8 @@
  * 用法：复制到 ~/.pi/agent/extensions/ 或项目 .pi/extensions/
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
@@ -368,6 +369,110 @@ const preflightTool = defineTool({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// T9：技能自动匹配通道（skill 工具 + 关键词检测）
+// ---------------------------------------------------------------------------
+// 【问题】force 模式下 system prompt 被破甲帧完全替换，Pi 原生的
+//   <available_skills> 索引被丢弃 → 模型不知道技能库存在 → 用户说
+//   "用 skill 实现" 时，模型自己造轮子而不会去找 ~/.pi/agent/skills/。
+//
+// 【关键发现】API payload 的 `tools` 字段**独立于 system prompt**：
+//   即使 force 模式丢弃了 <tools> 段，工具定义（含 description）
+//   依然通过 API 的 tools 参数完整传给模型。这是唯一不受 force 影响的
+//   语义通道（实证：payload 捕获显示 19 个工具定义完整存在）。
+//
+// 【方案】三重保险，零帧长代价（不碰破甲帧，不影响破甲率）：
+//   1. 工具名直白：叫 `skill` 而不是 `infinite_gen4_skill`，与用户口语匹配
+//   2. 工具描述写全：路径 + 用法 + 技能分类，模型每次请求都能看到
+//   3. 关键词检测：用户输入含 skill/技能 时，额外注入一条提示消息
+//
+// 【为什么不用「帧里加提示」】已实测无效（第 6.13/6.14 节）：
+//   帧里写 "可用技能在 ~/.pi/agent/skills/" 后，模型知道路径仍不去查。
+//   因为「知道路径」≠「知道有哪些」，匹配需要候选集。
+
+const SKILLS_ROOT = join(homedir(), ".pi", "agent", "skills");
+
+/** 列出所有技能（读目录 + frontmatter 的 name/description） */
+function listSkills(): Array<{ name: string; description: string; path: string }> {
+	try {
+		const out: Array<{ name: string; description: string; path: string }> = [];
+		for (const dir of readdirSync(SKILLS_ROOT, { withFileTypes: true })) {
+			if (!dir.isDirectory()) continue;
+			const file = join(SKILLS_ROOT, dir.name, "SKILL.md");
+			if (!existsSync(file)) continue;
+			let description = "";
+			try {
+				const raw = readFileSync(file, "utf8");
+				const fm = raw.split("---")[1] ?? "";
+				for (const line of fm.split("\n")) {
+					if (line.startsWith("description:")) {
+						description = line
+							.slice(12)
+							.trim()
+							.replace(/^["']|["']$/g, "")
+							.slice(0, 200);
+						break;
+					}
+				}
+			} catch {
+				/* 读失败则描述留空 */
+			}
+			out.push({ name: dir.name, description, path: file });
+		}
+		return out.sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+}
+
+const skillTool = defineTool({
+	name: "skill",
+	label: "技能库",
+	description:
+		"List or load agent skills from ~/.pi/agent/skills/. " +
+		"Call with no `name` to list every available skill (name + description + path). " +
+		"Call with `name` to read that skill's full SKILL.md and follow its method. " +
+		"ALWAYS call this first when the user says '用 skill'/'技能'/'结合 skill', or when the task matches a skill description " +
+		"(redteam-* skills cover 信息收集/主动扫描/漏洞利用/隧道/内网/webshell 等工作流; code-review/pr/tdd 等覆盖编程流程). " +
+		"Prefer a matching skill's documented method over inventing your own implementation.",
+	parameters: Type.Object({
+		name: Type.Optional(Type.String({ description: "skill directory name, e.g. redteam-active-scan" })),
+	}),
+	async execute(_id, params) {
+		const want = String(params.name ?? "").trim();
+		if (!want) {
+			const skills = listSkills();
+			return objectResult({
+				ok: true,
+				root: SKILLS_ROOT,
+				count: skills.length,
+				usage: "call skill({name}) to read its SKILL.md",
+				skills,
+			});
+		}
+		// 允许模糊匹配：精确 > 包含 > 后缀
+		const skills = listSkills();
+		let hit = skills.find((s) => s.name === want);
+		if (!hit) hit = skills.find((s) => s.name.includes(want) || want.includes(s.name));
+		if (!hit) {
+			return objectResult({ ok: false, error: "skill not found", want, available: skills.map((s) => s.name) });
+		}
+		let content = "";
+		try {
+			content = readFileSync(hit.path, "utf8");
+		} catch {
+			return objectResult({ ok: false, error: "read failed", path: hit.path });
+		}
+		return objectResult({
+			ok: true,
+			name: hit.name,
+			path: hit.path,
+			baseDir: join(SKILLS_ROOT, hit.name),
+			content,
+		});
+	},
+});
+
 // ---- 剩余 8 个工具（自包含实现，不依赖缺失的 scripts/lib）----
 
 const profile41Tool = defineTool({
@@ -696,18 +801,44 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 		const extraPath = process.env.PI_ARMOR_EXTRA;
 		if (extraPath) {
 			try {
-				const { readFileSync } = require("node:fs");
 				const extra = readFileSync(extraPath, "utf8");
 				if (extra) frameText = `${frameText}\n\n${extra}`;
 			} catch {
 				/* 实验脚手架失败不阻塞主流程 */
 			}
 		}
+
+		// T9b：关键词检测 —— 用户明确提到 skill/技能 时，注入一条提示消息。
+		// 载体是 role:"custom" 的消息（runner.ts:1345 → agent-session.ts:1735），
+		// 拼在用户消息之前，**不影响 systemPrompt**（破甲帧保持独占）。
+		const skillHint = /\b(skill|skills|技能)\b|结合.{0,4}skill|用.{0,4}技能/i.test(event.prompt)
+			? {
+					message: {
+						customType: "skill-hint",
+						display: false,
+						content: [
+							{
+								type: "text" as const,
+								text:
+									"用户要求使用技能。**在本轮回答前，你必须先执行以下工具调用：**\n\n" +
+									"第一步：调用 `skill` 工具，参数留空。\n" +
+									"第二步：从上一步返回的列表中，选出与用户任务最匹配的 1 条技能。\n" +
+									'第三步：调用 `skill` 工具，参数为 `{"name": "<选中的技能名>"}`，读取其完整内容。\n' +
+									"第四步：按该技能写明的方法、命令、参数、落库格式来完成任务。\n\n" +
+									"重要：\n" +
+									"- 必须先做完第一、二、三步，才能开始写任何实现代码或给出命令\n" +
+									"- 如果你打算自己写脚本，先检查技能里是否已有现成方法\n" +
+									"- 技能返回值里的内容为准，不要凭记忆或通用知识替代",
+							},
+						],
+					},
+				}
+			: undefined;
 		if (!frameText) return;
 
 		if (injectMode === "force") {
 			// 方式 A：完全替换（frame 独占全部 prompt）
-			return { systemPrompt: frameText };
+			return { systemPrompt: frameText, ...(skillHint ?? {}) };
 		}
 
 		// 方式 B：分段注入 —— 破甲帧作为独立 section，其余 section（skills 等）保留
@@ -715,7 +846,7 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 		if (opts && typeof opts === "object") {
 			opts.sections = { ...(opts.sections ?? {}), infinite_gen4_armor: frameText };
 		}
-		return;
+		return skillHint;
 	});
 
 	// 1b. 剥离 provider payload 的 reasoning_effort 字段（T7：可控模式）
@@ -772,6 +903,7 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 	pi.registerTool(rolesTool);
 	pi.registerTool(rolePromptTool);
 	pi.registerTool(preflightTool);
+	pi.registerTool(skillTool);
 	pi.registerTool(profile41Tool);
 	pi.registerTool(trainerLaneTool);
 	pi.registerTool(shallowNsfwTool);
