@@ -897,6 +897,8 @@ Classifier models consume structured JSON state and answer one or more typed que
 | `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` or OpenRouter OAuth |
 | `cloudflare-workers-ai` | `typesafe/jev` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
+| `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
 
 ```typescript
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
@@ -931,6 +933,36 @@ console.log(result.answers);
 ```
 
 The public contract uses `bool` questions and `{ type: "bool", probability }` answers. The TypeSafe adapter translates those to and from its `noul` wire representation. Like image generation, `classify()` resolves to a result with `stopReason: "error"` instead of rejecting for provider, authentication, or response errors.
+
+`ClassifierOptions.temperature` divides the answer logits by the given value before they are normalized; values above 1 soften the distribution. APIs that cannot apply it, such as System One, ignore it.
+
+### Chat models on llama.cpp
+
+The `llama-cpp-classify` API turns a chat model served by llama.cpp's `llama-server` into a classifier. Each question becomes one chat prompt: the state, every question of the request, the state again, and the question with its answers under single-token labels (letters for a choice, `Yes`/`No` for a bool, digits for a score). The prompt up to the final question is shared by all questions of a request, so the server's prompt cache evaluates the state once per request. The server returns the log-probabilities of the next token, and the answer is the softmax over the label tokens. Choices support up to 62 options and scores up to 10 levels. The model's `baseUrl` is the server URL; a trailing `/v1` is ignored. In router mode, the model ID selects the model.
+
+```typescript
+import { createProvider } from '@earendil-works/pi-ai';
+import { llamaCppClassifyApi } from '@earendil-works/pi-ai/api/llama-cpp-classify.lazy';
+
+const provider = createProvider({
+  id: 'local-llama',
+  auth: { apiKey: { name: 'llama.cpp', resolve: async () => ({ auth: {} }) } },
+  models: [{
+    type: 'classifier',
+    id: 'qwen3-4b',
+    name: 'Qwen3 4B',
+    api: 'llama-cpp-classify',
+    provider: 'local-llama',
+    baseUrl: 'http://127.0.0.1:8080',
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768
+  }],
+  classifiers: { 'llama-cpp-classify': llamaCppClassifyApi() }
+});
+```
+
+Raw label probabilities are usually overconfident; pass `temperature` above 1 to soften them.
 
 Custom providers register classifier models and implementations by API ID:
 
