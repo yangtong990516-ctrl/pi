@@ -688,7 +688,21 @@ export default function infiniteGen4(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", (event, ctx) => {
 		// 档位自适应：按当前模型 id 选择帧组合（含术语映射 + 档位规则）
-		const frameText = buildFrame(currentModelId(ctx as { model?: { id?: string } }));
+		let frameText = buildFrame(currentModelId(ctx as { model?: { id?: string } }));
+
+		// 实验脚手架（T9）：PI_ARMOR_EXTRA 指向一个文件，其内容追加到帧末尾。
+		// 用途：隔离测试「技能索引」等附加内容对破甲率的净影响，而不实际改变默认行为。
+		// 生产环境不设置该变量，行为与改造前完全一致。
+		const extraPath = process.env.PI_ARMOR_EXTRA;
+		if (extraPath) {
+			try {
+				const { readFileSync } = require("node:fs");
+				const extra = readFileSync(extraPath, "utf8");
+				if (extra) frameText = `${frameText}\n\n${extra}`;
+			} catch {
+				/* 实验脚手架失败不阻塞主流程 */
+			}
+		}
 		if (!frameText) return;
 
 		if (injectMode === "force") {
